@@ -97,4 +97,76 @@ def parse_ethernet_frame(data):
     if len(data) < offset + total_length:
         lines.append("提示：捕获的数据短于 IPv4 声明的总长度。")
 
+    # 分片需要先重组，此阶段不解析分片中的传输层。
+    more_fragments = (flags_fragment >> 13) & 1
+    if more_fragments or fragment_offset != 0:
+        lines.append("该 IPv4 数据报存在分片，暂不解析传输层。")
+        return "\n".join(lines)
+
+    # IP 总长度限定数据报边界，避免把以太网填充当作 TCP 数据。
+    payload_start = offset + header_length
+    payload_end = min(len(data), offset + total_length)
+    transport_data = data[payload_start:payload_end]
+
+    if protocol == 6:
+        lines.extend(parse_tcp_segment(transport_data))
+
     return "\n".join(lines)
+
+def parse_tcp_segment(data):
+    """解析 TCP 头部，data 应从 TCP 的第一个字节开始。"""
+    lines = ["【TCP 层】"]
+
+    if len(data) < 20:
+        lines.append("数据不足：TCP 基本头部至少需要 20 字节。")
+        return lines
+
+    (
+        source_port,
+        destination_port,
+        sequence,
+        acknowledgment,
+        offset_flags,
+        window,
+        checksum,
+        urgent_pointer,
+    ) = struct.unpack("!HHIIHHHH", data[:20])
+
+    header_length = ((offset_flags >> 12) & 0x0F) * 4
+
+    if header_length < 20:
+        lines.append("无效的 TCP 头部长度。")
+        return lines
+
+    if len(data) < header_length:
+        lines.append("数据不足：TCP 头部或选项不完整。")
+        return lines
+
+    flag_definitions = [
+        (0x01, "FIN"),
+        (0x02, "SYN"),
+        (0x04, "RST"),
+        (0x08, "PSH"),
+        (0x10, "ACK"),
+        (0x20, "URG"),
+        (0x40, "ECE"),
+        (0x80, "CWR"),
+    ]
+    flag_names = [
+        name for mask, name in flag_definitions
+        if offset_flags & mask
+    ]
+
+    lines.append(f"源端口：{source_port}")
+    lines.append(f"目的端口：{destination_port}")
+    lines.append(f"序列号：{sequence}")
+    lines.append(f"确认号：{acknowledgment}")
+    lines.append(f"头部长度：{header_length} 字节")
+    lines.append(f"标志位：{', '.join(flag_names) or '无'}")
+    lines.append(f"窗口字段原始值：{window}")
+    lines.append(f"校验和：0x{checksum:04x}（尚未验证）")
+    lines.append(f"紧急指针：{urgent_pointer}")
+    lines.append(f"选项长度：{header_length - 20} 字节")
+    lines.append(f"本次捕获的 TCP 载荷长度：{len(data) - header_length} 字节")
+
+    return lines
