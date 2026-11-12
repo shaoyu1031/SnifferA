@@ -112,6 +112,8 @@ def parse_ethernet_frame(data):
         lines.extend(parse_tcp_segment(transport_data))
     elif protocol == 17:
         lines.extend(parse_udp_datagram(transport_data))
+    elif protocol == 1:
+        lines.extend(parse_icmp_message(transport_data))
 
     return "\n".join(lines)
 
@@ -206,5 +208,48 @@ def parse_udp_datagram(data):
         lines.append("提示：捕获的数据短于 UDP 声明的总长度。")
     elif len(data) > udp_length:
         lines.append("提示：IP 载荷超出 UDP 声明长度，超出部分未计入。")
+
+    return lines
+
+def parse_icmp_message(data):
+    """解析 ICMPv4 公共头部，以及回显请求/应答字段。"""
+    lines = ["【ICMPv4 层】"]
+
+    if len(data) < 4:
+        lines.append("数据不足：ICMP 公共头部至少需要 4 字节。")
+        return lines
+
+    message_type, code, checksum = struct.unpack("!BBH", data[:4])
+
+    type_names = {
+        0: "回显应答",
+        3: "目的不可达",
+        5: "重定向",
+        8: "回显请求",
+        11: "超时",
+        12: "参数问题",
+    }
+
+    lines.append(
+        f"类型：{message_type}"
+        f"（{type_names.get(message_type, '其他类型')}）"
+    )
+    lines.append(f"代码：{code}")
+    lines.append(f"校验和：0x{checksum:04x}（尚未验证）")
+
+    if message_type in (0, 8):
+        if len(data) < 8:
+            lines.append("数据不足：ICMP 回显头部需要 8 字节。")
+            return lines
+
+        identifier, sequence = struct.unpack("!HH", data[4:8])
+        lines.append(f"标识符：{identifier}")
+        lines.append(f"序列号：{sequence}")
+        lines.append(f"本次捕获的回显数据长度：{len(data) - 8} 字节")
+
+        if code != 0:
+            lines.append("提示：回显请求或应答的代码应为 0。")
+    else:
+        lines.append("该类型目前仅解析公共头部。")
 
     return lines

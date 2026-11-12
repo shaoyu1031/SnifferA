@@ -22,14 +22,14 @@ def main():
         return
 
     protocol_choice = input(
-        "\n选择测试协议：0=不限，1=IPv4 TCP，2=IPv4 UDP："
+        "\n选择测试协议：0=不限，1=IPv4 TCP，2=IPv4 UDP，3=ICMPv4："
     ).strip()
 
-    if protocol_choice not in ("0", "1", "2"):
-        print("请输入 0、1 或 2。")
+    if protocol_choice not in ("0", "1", "2", "3"):
+        print("请输入 0、1、2 或 3。")
         return
 
-    target_protocol = {"1": 6, "2": 17}.get(protocol_choice)
+    target_protocol = {"1": 6, "2": 17, "3": 1}.get(protocol_choice)
 
     def matches(packet):
         # 当前手写解析器以以太网帧为入口。
@@ -57,7 +57,12 @@ def main():
     selected = interfaces[choice - 1]
     print(f"\n已选择：{selected.name}")
     print("等待符合条件的数据包，最多 30 秒。")
-    print("测试 UDP 时，可在另一个终端执行：nslookup example.com")
+    if protocol_choice == "2":
+        print("请在另一个终端执行：nslookup example.com")
+    elif protocol_choice == "3":
+        print("请在另一个终端执行 ping -4 加上本机 IPv4 默认网关地址。")
+    elif protocol_choice == "1":
+        print("请访问网页，产生 TCP 流量。")
 
     try:
         packets = sniff(
