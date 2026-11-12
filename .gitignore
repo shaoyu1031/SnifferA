@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pyc
+report_images/
+captures/
+*.pcap
+*.pcapng
