@@ -110,6 +110,8 @@ def parse_ethernet_frame(data):
 
     if protocol == 6:
         lines.extend(parse_tcp_segment(transport_data))
+    elif protocol == 17:
+        lines.extend(parse_udp_datagram(transport_data))
 
     return "\n".join(lines)
 
@@ -168,5 +170,41 @@ def parse_tcp_segment(data):
     lines.append(f"紧急指针：{urgent_pointer}")
     lines.append(f"选项长度：{header_length - 20} 字节")
     lines.append(f"本次捕获的 TCP 载荷长度：{len(data) - header_length} 字节")
+
+    return lines
+
+def parse_udp_datagram(data):
+    """解析 UDP 头部，data 从 UDP 的第一个字节开始。"""
+    lines = ["【UDP 层】"]
+
+    if len(data) < 8:
+        lines.append("数据不足：UDP 头部至少需要 8 字节。")
+        return lines
+
+    source_port, destination_port, udp_length, checksum = (
+        struct.unpack("!HHHH", data[:8])
+    )
+
+    lines.append(f"源端口：{source_port}")
+    lines.append(f"目的端口：{destination_port}")
+    lines.append(f"UDP 总长度：{udp_length} 字节")
+    lines.append("头部长度：8 字节")
+    lines.append(f"校验和：0x{checksum:04x}（尚未验证）")
+
+    if udp_length < 8:
+        lines.append("无效的 UDP 长度：不能小于头部长度。")
+        return lines
+
+    lines.append(f"声明的载荷长度：{udp_length - 8} 字节")
+
+    captured_length = min(len(data), udp_length)
+    lines.append(
+        f"本次捕获的 UDP 载荷长度：{captured_length - 8} 字节"
+    )
+
+    if len(data) < udp_length:
+        lines.append("提示：捕获的数据短于 UDP 声明的总长度。")
+    elif len(data) > udp_length:
+        lines.append("提示：IP 载荷超出 UDP 声明长度，超出部分未计入。")
 
     return lines
