@@ -6,9 +6,8 @@ from tkinter import ttk, messagebox
 from tkinter.scrolledtext import ScrolledText
 
 from scapy.all import Ether, conf, sniff
-
 from packet_parser import parse_ethernet_frame
-
+from packet_filter import matches_protocol
 
 class SnifferApp:
     def __init__(self, root):
@@ -60,6 +59,24 @@ class SnifferApp:
         )
         self.stop_button.pack(side="left", padx=5)
 
+        filter_bar = ttk.Frame(root, padding=(8, 0, 8, 5))
+        filter_bar.pack(fill="x")
+
+        ttk.Label(filter_bar, text="协议过滤：").pack(side="left")
+
+        self.filter_box = ttk.Combobox(
+            filter_bar,
+            values=("全部", "TCP", "UDP", "ICMPv4", "IPv4", "IPv6"),
+            state="readonly",
+            width=15,
+        )
+        self.filter_box.current(0)
+        self.filter_box.pack(side="left", padx=5)
+
+        ttk.Label(
+            filter_bar,
+            text="开始前选择；收到数据包后进行软件过滤",
+        ).pack(side="left", padx=8)
         panes = ttk.Panedwindow(root, orient="vertical")
         panes.pack(fill="both", expand=True, padx=8, pady=5)
 
@@ -138,6 +155,8 @@ class SnifferApp:
         self.stop_event.clear()
 
         selected = self.interfaces[index]
+        selected_filter = self.filter_box.get()
+        self.filter_box.configure(state="disabled")
         self.start_button.configure(state="disabled")
         self.stop_button.configure(state="normal")
         self.interface_box.configure(state="disabled")
@@ -147,15 +166,21 @@ class SnifferApp:
 
         self.worker = threading.Thread(
             target=self.capture_worker,
-            args=(selected,),
+            args=(selected, selected_filter),
             daemon=True,
         )
         self.worker.start()
 
-    def capture_worker(self, interface):
+    def capture_worker(self, interface, selected_filter):
         def receive(packet):
             if self.stop_event.is_set():
                 return
+
+            if selected_filter != "全部":
+                if not isinstance(packet, Ether):
+                    return
+                if not matches_protocol(bytes(packet), selected_filter):
+                    return
 
             # 队列满时等待界面消费，同时允许停止。
             while not self.stop_event.is_set():
@@ -220,6 +245,7 @@ class SnifferApp:
                 self.start_button.configure(state="normal")
                 self.stop_button.configure(state="disabled")
                 self.interface_box.configure(state="readonly")
+                self.filter_box.configure(state="readonly")
 
                 try:
                     error = self.errors.get_nowait()
