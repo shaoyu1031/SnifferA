@@ -66,7 +66,7 @@ class SnifferApp:
 
         self.filter_box = ttk.Combobox(
             filter_bar,
-            values=("全部", "TCP", "UDP", "ICMPv4", "IPv4", "IPv6"),
+            values=("全部", "TCP", "UDP", "ICMPv4", "IPv4", "IPv6", "HTTP"),
             state="readonly",
             width=15,
         )
@@ -192,9 +192,16 @@ class SnifferApp:
                 return
 
             if selected_filter != "全部":
-                if not isinstance(packet, Ether):
+                if isinstance(packet, Ether):
+                    link_type = "ethernet"
+                elif isinstance(packet, Loopback):
+                    link_type = "loopback"
+                else:
                     return
-                if not matches_protocol(bytes(packet), selected_filter):
+
+                if not matches_protocol(
+                    bytes(packet), selected_filter, link_type
+                ):
                     return
 
             # 队列满时等待界面消费，同时允许停止。
