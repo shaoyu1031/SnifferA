@@ -5,6 +5,7 @@ from datetime import datetime
 from tkinter import ttk, messagebox, filedialog
 from tkinter.scrolledtext import ScrolledText
 from pathlib import Path
+from tcp_flow import extract_tcp_info
 
 from scapy.all import Ether, Loopback, conf, AsyncSniffer, wrpcap
 from packet_parser import parse_ethernet_frame, parse_loopback_frame
@@ -59,6 +60,12 @@ class SnifferApp:
             command=self.stop_capture, state="disabled"
         )
         self.stop_button.pack(side="left", padx=5)
+        self.flow_button = ttk.Button(
+            toolbar,
+            text="追踪 TCP 流",
+            command=self.follow_tcp_flow,
+        )
+        self.flow_button.pack(side="left", padx=5)
         self.export_button = ttk.Button(
             toolbar,
             text="导出 PCAP",
@@ -382,6 +389,93 @@ class SnifferApp:
                 f"{offset:04x}  {hex_part:<47}  {ascii_part}"
             )
         self.set_text(self.hex_view, "\n".join(rows))
+
+    def follow_tcp_flow(self):
+        if self.worker is not None:
+            messagebox.showinfo("请先停止", "停止抓包后再追踪 TCP 流。")
+            return
+
+        selected = self.table.selection()
+        if not selected:
+            messagebox.showinfo("请选择", "请先选中一个 TCP 数据包。")
+            return
+
+        def get_info(packet):
+            if isinstance(packet, Ether):
+                link_type = "ethernet"
+            elif isinstance(packet, Loopback):
+                link_type = "loopback"
+            else:
+                return None
+            return extract_tcp_info(bytes(packet), link_type)
+
+        try:
+            target = get_info(self.packets[selected[0]])
+            if target is None:
+                messagebox.showinfo(
+                    "无法追踪",
+                    "选中的包不是当前支持的完整 TCP 包，"
+                    "或它需要 IP 分片重组。",
+                )
+                return
+
+            rows = []
+            for item_id, packet in self.packets.items():
+                info = get_info(packet)
+                if info is not None and info["key"] == target["key"]:
+                    rows.append((item_id, packet, info))
+
+        except Exception as error:
+            messagebox.showerror(
+                "流分析失败", f"{type(error).__name__}: {error}"
+            )
+            return
+
+        endpoint_a, endpoint_b = target["key"][1]
+        first_time = float(rows[0][1].time)
+        totals = {"A→B": 0, "B→A": 0}
+        lines = [
+            f"A = [{endpoint_a[0]}]:{endpoint_a[1]}",
+            f"B = [{endpoint_b[0]}]:{endpoint_b[1]}",
+            f"匹配当前列表中的 {len(rows)} 个包。",
+            "按捕获顺序展示；未进行字节流重组、重传去重或连接复用分离。",
+            "载荷预览使用字节表示，最多显示每个包的前 300 字节。",
+            "",
+        ]
+
+        for item_id, packet, info in rows:
+            direction = "A→B" if info["source"] == endpoint_a else "B→A"
+            payload = info["payload"]
+            totals[direction] += len(payload)
+            elapsed = float(packet.time) - first_time
+
+            lines.append(
+                f"包 #{item_id}  +{elapsed:.6f}s  {direction}  "
+                f"标志={info['flags']}  "
+                f"Seq={info['sequence']}  Ack={info['acknowledgment']}  "
+                f"载荷={len(payload)} 字节"
+            )
+            if payload:
+                lines.append(f"  载荷预览：{payload[:300]!r}")
+                if len(payload) > 300:
+                    lines.append("  ……预览已截断")
+            lines.append("")
+
+        lines.append(
+            f"载荷字节累计：A→B {totals['A→B']}，"
+            f"B→A {totals['B→A']}（含可能的重传重复字节）。"
+        )
+
+        window = tk.Toplevel(self.root)
+        window.title("TCP 流追踪：双向报文")
+        window.geometry("1100x700")
+
+        text = ScrolledText(
+            window, wrap="word", font=("Consolas", 11)
+        )
+        text.pack(fill="both", expand=True, padx=8, pady=8)
+        text.insert("1.0", "\n".join(lines))
+        text.configure(state="disabled")
 
     def export_pcap(self):
         if self.worker is not None:
