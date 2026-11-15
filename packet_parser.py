@@ -1,3 +1,5 @@
+from http_parser import parse_http_payload
+
 import socket
 import struct
 
@@ -51,10 +53,19 @@ def parse_ethernet_frame(data):
         )
         return "\n".join(lines)
 
+    lines.extend(parse_ipv4_packet(data[offset:]))
+    return "\n".join(lines)
+
+
+def parse_ipv4_packet(data):
+    """data 从 IPv4 头部的第一个字节开始。"""
+    lines = []
+    offset = 0
+
     # IPv4 固定部分至少占 20 字节。
     if len(data) < offset + 20:
         lines.append("数据不足：IPv4 基本头部不完整。")
-        return "\n".join(lines)
+        return lines
 
     fields = struct.unpack(
         "!BBHHHBBH4s4s", data[offset:offset + 20]
@@ -70,15 +81,15 @@ def parse_ethernet_frame(data):
 
     if version != 4 or header_length < 20:
         lines.append("无效的 IPv4 版本或头部长度。")
-        return "\n".join(lines)
+        return lines
 
     if total_length < header_length:
         lines.append("无效的 IPv4 总长度。")
-        return "\n".join(lines)
+        return lines
 
     if len(data) < offset + header_length:
         lines.append("数据不足：IPv4 头部或选项不完整。")
-        return "\n".join(lines)
+        return lines
 
     protocol_names = {1: "ICMP", 6: "TCP", 17: "UDP"}
     protocol_name = protocol_names.get(protocol, "其他")
@@ -105,7 +116,7 @@ def parse_ethernet_frame(data):
     more_fragments = (flags_fragment >> 13) & 1
     if more_fragments or fragment_offset != 0:
         lines.append("该 IPv4 数据报存在分片，暂不解析传输层。")
-        return "\n".join(lines)
+        return lines
 
     # IP 总长度限定数据报边界，避免把以太网填充当作 TCP 数据。
     payload_start = offset + header_length
@@ -119,7 +130,7 @@ def parse_ethernet_frame(data):
     elif protocol == 1:
         lines.extend(parse_icmp_message(transport_data))
 
-    return "\n".join(lines)
+    return lines
 
 def parse_tcp_segment(data):
     """解析 TCP 头部，data 应从 TCP 的第一个字节开始。"""
@@ -176,6 +187,10 @@ def parse_tcp_segment(data):
     lines.append(f"紧急指针：{urgent_pointer}")
     lines.append(f"选项长度：{header_length - 20} 字节")
     lines.append(f"本次捕获的 TCP 载荷长度：{len(data) - header_length} 字节")
+
+    payload = data[header_length:]
+    if payload:
+        lines.extend(parse_http_payload(payload))
 
     return lines
 
@@ -337,3 +352,28 @@ def parse_ipv6_packet(data):
         lines.append("该下一头部尚未实现解析，在此停止。")
 
     return lines
+def parse_loopback_frame(data):
+    """处理本次环境中捕获到的 IPv4 回环帧。"""
+    lines = ["【回环链路层】"]
+
+    if len(data) < 4:
+        return "数据不足：回环头部至少需要 4 字节。"
+
+    # 本机实际捕获的 IPv4 地址族为 02 00 00 00。
+    family = struct.unpack("<I", data[:4])[0]
+    lines.append("链路层头部长度：4 字节")
+    lines.append(f"地址族：{family}")
+    lines.append("回环头部不包含源 MAC 和目的 MAC。")
+
+    network_data = data[4:]
+
+    if family != 2:
+        lines.append("当前回环解析入口暂不支持此地址族。")
+    elif not network_data:
+        lines.append("数据不足：缺少 IPv4 数据。")
+    elif network_data[0] >> 4 != 4:
+        lines.append("地址族与 IP 版本不一致，停止解析。")
+    else:
+        lines.extend(parse_ipv4_packet(network_data))
+
+    return "\n".join(lines)

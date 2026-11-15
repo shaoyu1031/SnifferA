@@ -5,8 +5,8 @@ from datetime import datetime
 from tkinter import ttk, messagebox
 from tkinter.scrolledtext import ScrolledText
 
-from scapy.all import Ether, conf, sniff
-from packet_parser import parse_ethernet_frame
+from scapy.all import Ether, Loopback, conf, sniff
+from packet_parser import parse_ethernet_frame, parse_loopback_frame
 from packet_filter import matches_protocol
 
 class SnifferApp:
@@ -76,6 +76,19 @@ class SnifferApp:
         ttk.Label(
             filter_bar,
             text="开始前选择；收到数据包后进行软件过滤",
+        ).pack(side="left", padx=8)
+        capture_bar = ttk.Frame(root, padding=(8, 0, 8, 5))
+        capture_bar.pack(fill="x")
+
+        ttk.Label(
+            capture_bar, text="抓包表达式："
+        ).pack(side="left")
+
+        self.capture_filter_entry = ttk.Entry(capture_bar, width=45)
+        self.capture_filter_entry.pack(side="left", padx=5)
+
+        ttk.Label(
+            capture_bar, text="可留空；例如 tcp port 8000"
         ).pack(side="left", padx=8)
         panes = ttk.Panedwindow(root, orient="vertical")
         panes.pack(fill="both", expand=True, padx=8, pady=5)
@@ -156,6 +169,8 @@ class SnifferApp:
 
         selected = self.interfaces[index]
         selected_filter = self.filter_box.get()
+        capture_filter = self.capture_filter_entry.get().strip()
+        self.capture_filter_entry.configure(state="disabled")
         self.filter_box.configure(state="disabled")
         self.start_button.configure(state="disabled")
         self.stop_button.configure(state="normal")
@@ -166,12 +181,12 @@ class SnifferApp:
 
         self.worker = threading.Thread(
             target=self.capture_worker,
-            args=(selected, selected_filter),
+            args=(selected, selected_filter, capture_filter),
             daemon=True,
         )
         self.worker.start()
 
-    def capture_worker(self, interface, selected_filter):
+    def capture_worker(self, interface, selected_filter, capture_filter):
         def receive(packet):
             if self.stop_event.is_set():
                 return
@@ -194,6 +209,7 @@ class SnifferApp:
             while not self.stop_event.is_set():
                 sniff(
                     iface=interface,
+                    filter=capture_filter or None,
                     prn=receive,
                     store=False,
                     timeout=1,
@@ -246,6 +262,7 @@ class SnifferApp:
                 self.stop_button.configure(state="disabled")
                 self.interface_box.configure(state="readonly")
                 self.filter_box.configure(state="readonly")
+                self.capture_filter_entry.configure(state="normal")
 
                 try:
                     error = self.errors.get_nowait()
@@ -276,16 +293,18 @@ class SnifferApp:
         packet = self.packets[selected[0]]
         raw_data = bytes(packet)
 
-        if isinstance(packet, Ether):
-            try:
+        try:
+            if isinstance(packet, Ether):
                 result = parse_ethernet_frame(raw_data)
-            except Exception as error:
-                result = (
-                    f"解析失败：{type(error).__name__}: {error}\n"
-                    "请保留该结果用于排查。"
-                )
-        else:
-            result = "当前解析器只支持以太网帧，此包的链路层格式尚未支持。"
+            elif isinstance(packet, Loopback):
+                result = parse_loopback_frame(raw_data)
+            else:
+                result = "当前包的链路层格式尚未支持。"
+        except Exception as error:
+            result = (
+                f"解析失败：{type(error).__name__}: {error}\n"
+                "请保留该结果用于排查。"
+            )
 
         self.set_text(self.details, result)
 
