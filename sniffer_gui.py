@@ -2,10 +2,11 @@ import queue
 import threading
 import tkinter as tk
 from datetime import datetime
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 from tkinter.scrolledtext import ScrolledText
+from pathlib import Path
 
-from scapy.all import Ether, Loopback, conf, sniff
+from scapy.all import Ether, Loopback, conf, sniff, wrpcap
 from packet_parser import parse_ethernet_frame, parse_loopback_frame
 from packet_filter import matches_protocol
 
@@ -58,6 +59,13 @@ class SnifferApp:
             command=self.stop_capture, state="disabled"
         )
         self.stop_button.pack(side="left", padx=5)
+        self.export_button = ttk.Button(
+            toolbar,
+            text="导出 PCAP",
+            command=self.export_pcap,
+            state="disabled",
+        )
+        self.export_button.pack(side="left", padx=5)
 
         filter_bar = ttk.Frame(root, padding=(8, 0, 8, 5))
         filter_bar.pack(fill="x")
@@ -173,6 +181,7 @@ class SnifferApp:
         self.capture_filter_entry.configure(state="disabled")
         self.filter_box.configure(state="disabled")
         self.start_button.configure(state="disabled")
+        self.export_button.configure(state="disabled")
         self.stop_button.configure(state="normal")
         self.interface_box.configure(state="disabled")
         self.status.set(
@@ -266,6 +275,9 @@ class SnifferApp:
             if self.packet_queue.empty():
                 self.worker = None
                 self.start_button.configure(state="normal")
+                self.export_button.configure(
+                    state="normal" if self.packets else "disabled"
+                )
                 self.stop_button.configure(state="disabled")
                 self.interface_box.configure(state="readonly")
                 self.filter_box.configure(state="readonly")
@@ -327,6 +339,65 @@ class SnifferApp:
                 f"{offset:04x}  {hex_part:<47}  {ascii_part}"
             )
         self.set_text(self.hex_view, "\n".join(rows))
+
+    def export_pcap(self):
+        if self.worker is not None:
+            messagebox.showinfo("请先停止", "停止抓包后再导出。")
+            return
+
+        packets = list(self.packets.values())
+        if not packets:
+            messagebox.showinfo("没有数据", "当前没有可导出的数据包。")
+            return
+
+        # 普通 PCAP 文件使用统一的链路层类型。
+        link_types = {type(packet) for packet in packets}
+        if len(link_types) != 1:
+            messagebox.showerror(
+                "无法导出",
+                "当前数据包含不同链路层类型，不能写入同一普通 PCAP 文件。",
+            )
+            return
+
+        capture_dir = Path(__file__).resolve().parent / "captures"
+
+        try:
+            capture_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as error:
+            messagebox.showerror("目录创建失败", str(error))
+            return
+
+        default_name = datetime.now().strftime(
+            "capture_%Y%m%d_%H%M%S.pcap"
+        )
+
+        filename = filedialog.asksaveasfilename(
+            title="导出当前列表中的数据包",
+            initialdir=str(capture_dir),
+            initialfile=default_name,
+            defaultextension=".pcap",
+            filetypes=[("PCAP 抓包文件", "*.pcap")],
+        )
+
+        if not filename:
+            return
+
+        try:
+            wrpcap(filename, packets)
+        except Exception as error:
+            messagebox.showerror(
+                "导出失败",
+                f"{type(error).__name__}: {error}\n"
+                "目标位置可能留有未完整写入的文件。",
+            )
+            return
+
+        messagebox.showinfo(
+            "导出成功",
+            f"已导出 {len(packets)} 个数据包。\n"
+            f"位置：{filename}\n\n"
+            "仅包含当前列表保留的数据包。",
+        )
 
     def close(self):
         self.closing = True
