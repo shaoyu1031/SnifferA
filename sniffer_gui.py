@@ -6,7 +6,7 @@ from tkinter import ttk, messagebox, filedialog
 from tkinter.scrolledtext import ScrolledText
 from pathlib import Path
 
-from scapy.all import Ether, Loopback, conf, sniff, wrpcap
+from scapy.all import Ether, Loopback, conf, AsyncSniffer, wrpcap
 from packet_parser import parse_ethernet_frame, parse_loopback_frame
 from packet_filter import matches_protocol
 
@@ -196,44 +196,87 @@ class SnifferApp:
         self.worker.start()
 
     def capture_worker(self, interface, selected_filter, capture_filter):
+        ready = threading.Event()
+
         def receive(packet):
             if self.stop_event.is_set():
                 return
 
-            if selected_filter != "全部":
-                if isinstance(packet, Ether):
-                    link_type = "ethernet"
-                elif isinstance(packet, Loopback):
-                    link_type = "loopback"
-                else:
-                    return
+            try:
+                if selected_filter != "全部":
+                    if isinstance(packet, Ether):
+                        link_type = "ethernet"
+                    elif isinstance(packet, Loopback):
+                        link_type = "loopback"
+                    else:
+                        return
 
-                if not matches_protocol(
-                    bytes(packet), selected_filter, link_type
-                ):
-                    return
+                    if not matches_protocol(
+                        bytes(packet), selected_filter, link_type
+                    ):
+                        return
 
-            # 队列满时等待界面消费，同时允许停止。
-            while not self.stop_event.is_set():
-                try:
-                    self.packet_queue.put(packet, timeout=0.1)
-                    return
-                except queue.Full:
-                    continue
+                # 界面来不及消费时，等待期间仍响应停止请求。
+                while not self.stop_event.is_set():
+                    try:
+                        self.packet_queue.put(packet, timeout=0.1)
+                        return
+                    except queue.Full:
+                        continue
+
+            except Exception as error:
+                self.errors.put(
+                    f"数据包处理失败：{type(error).__name__}: {error}"
+                )
+                self.stop_event.set()
+
+        sniffer = AsyncSniffer(
+            iface=interface,
+            filter=capture_filter or None,
+            prn=receive,
+            store=False,
+            started_callback=ready.set,
+        )
 
         try:
-            while not self.stop_event.is_set():
-                sniff(
-                    iface=interface,
-                    filter=capture_filter or None,
-                    prn=receive,
-                    store=False,
-                    timeout=1,
-                    stop_filter=lambda packet: self.stop_event.is_set(),
-                )
+            sniffer.start()
+
+            while True:
+                # 等待发生在后台管理线程，不阻塞 Tkinter 界面。
+                # join 也能把抓包线程中的启动错误传递出来。
+                sniffer.join(timeout=0.1)
+
+                if not sniffer.thread.is_alive():
+                    break
+
+                # 等抓包真正启动后才调用 stop，
+                # 避免刚点击开始就停止时的初始化竞争。
+                if self.stop_event.is_set() and ready.is_set():
+                    sniffer.stop(join=True)
+                    break
+
         except Exception as error:
-            self.errors.put(f"{type(error).__name__}: {error}")
+            self.errors.put(
+                f"抓包失败：{type(error).__name__}: {error}"
+            )
             self.stop_event.set()
+
+        finally:
+            self.stop_event.set()
+
+            # 异常退出时，尽量回收仍在运行的抓包线程。
+            if (
+                sniffer.thread is not None
+                and sniffer.thread.is_alive()
+                and ready.is_set()
+                and sniffer.running
+            ):
+                try:
+                    sniffer.stop(join=True)
+                except Exception as error:
+                    self.errors.put(
+                        f"停止抓包失败：{type(error).__name__}: {error}"
+                    )
 
     def stop_capture(self):
         self.stop_event.set()
