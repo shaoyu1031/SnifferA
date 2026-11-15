@@ -41,6 +41,10 @@ def parse_ethernet_frame(data):
         lines.append(f"内部类型：0x{ether_type:04x}")
         offset += 4
 
+    if ether_type == 0x86DD:
+        lines.extend(parse_ipv6_packet(data[offset:]))
+        return "\n".join(lines)
+
     if ether_type != 0x0800:
         lines.append(
             f"当前版本暂未解析此网络层类型：0x{ether_type:04x}"
@@ -251,5 +255,85 @@ def parse_icmp_message(data):
             lines.append("提示：回显请求或应答的代码应为 0。")
     else:
         lines.append("该类型目前仅解析公共头部。")
+
+    return lines
+
+def parse_ipv6_packet(data):
+    """data 从 IPv6 基本头部的第一个字节开始。"""
+    lines = ["【IPv6 层】"]
+
+    # IPv6 基本头部固定为 40 字节。
+    if len(data) < 40:
+        lines.append("数据不足：IPv6 基本头部需要 40 字节。")
+        return lines
+
+    (
+        first_word,
+        payload_length,
+        next_header,
+        hop_limit,
+        source_address,
+        destination_address,
+    ) = struct.unpack("!IHBB16s16s", data[:40])
+
+    version = first_word >> 28
+    if version != 6:
+        lines.append("无效的 IPv6 版本。")
+        return lines
+
+    traffic_class = (first_word >> 20) & 0xFF
+    flow_label = first_word & 0xFFFFF
+
+    header_names = {
+        0: "逐跳选项",
+        6: "TCP",
+        17: "UDP",
+        43: "路由扩展头",
+        44: "分片扩展头",
+        50: "ESP",
+        51: "AH",
+        58: "ICMPv6",
+        59: "无下一头部",
+        60: "目的选项",
+    }
+
+    lines.append(f"版本：{version}")
+    lines.append(
+        f"源 IP：{socket.inet_ntop(socket.AF_INET6, source_address)}"
+    )
+    lines.append(
+        f"目的 IP：{socket.inet_ntop(socket.AF_INET6, destination_address)}"
+    )
+    lines.append(f"流量类别：{traffic_class}（0x{traffic_class:02x}）")
+    lines.append(f"流标签：{flow_label}（0x{flow_label:05x}）")
+    lines.append("基本头部长度：40 字节")
+    lines.append(f"声明的载荷长度：{payload_length} 字节")
+    lines.append(
+        f"下一头部：{next_header}"
+        f"（{header_names.get(next_header, '其他')}）"
+    )
+    lines.append(f"跳数限制：{hop_limit}")
+
+    # 长度为 0 也可能涉及 Jumbo Payload 选项，暂不继续解析。
+    if payload_length == 0:
+        lines.append("载荷长度为 0：本阶段不继续解析后续内容。")
+        return lines
+
+    declared_end = 40 + payload_length
+    if len(data) < declared_end:
+        lines.append("提示：捕获的数据短于 IPv6 声明的长度。")
+
+    payload = data[40:min(len(data), declared_end)]
+
+    if next_header == 6:
+        lines.extend(parse_tcp_segment(payload))
+    elif next_header == 17:
+        lines.extend(parse_udp_datagram(payload))
+    elif next_header == 58:
+        lines.append("已识别 ICMPv6，具体字段将在后续实现。")
+    elif next_header == 59:
+        lines.append("无下一头部，不继续解析。")
+    else:
+        lines.append("该下一头部尚未实现解析，在此停止。")
 
     return lines

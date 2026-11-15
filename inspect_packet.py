@@ -1,4 +1,4 @@
-from scapy.all import Ether, IP, conf, sniff
+from scapy.all import Ether, IP, IPv6, conf, sniff
 
 from packet_parser import parse_ethernet_frame
 
@@ -22,32 +22,33 @@ def main():
         return
 
     protocol_choice = input(
-        "\n选择测试协议：0=不限，1=IPv4 TCP，2=IPv4 UDP，3=ICMPv4："
+        "\n选择测试协议：0=不限，1=IPv4 TCP，2=IPv4 UDP，"
+        "3=ICMPv4，4=IPv6："
     ).strip()
 
-    if protocol_choice not in ("0", "1", "2", "3"):
-        print("请输入 0、1、2 或 3。")
+    if protocol_choice not in ("0", "1", "2", "3", "4"):
+        print("请输入 0、1、2、3 或 4。")
         return
 
     target_protocol = {"1": 6, "2": 17, "3": 1}.get(protocol_choice)
 
     def matches(packet):
-        # 当前手写解析器以以太网帧为入口。
         if not isinstance(packet, Ether):
             return False
 
-        if target_protocol is None:
+        if protocol_choice == "0":
             return True
 
-        # 从链路层往内寻找网络层，同时兼容 VLAN 标签。
         layer = packet.payload
         while layer.__class__.__name__ in ("Dot1Q", "Dot1AD"):
             layer = layer.payload
 
+        if protocol_choice == "4":
+            return isinstance(layer, IPv6)
+
         if not isinstance(layer, IP):
             return False
 
-        # 当前版本不处理 IPv4 分片。
         return (
             layer.proto == target_protocol
             and layer.frag == 0
@@ -63,6 +64,8 @@ def main():
         print("请在另一个终端执行 ping -4 加上本机 IPv4 默认网关地址。")
     elif protocol_choice == "1":
         print("请访问网页，产生 TCP 流量。")
+    elif protocol_choice == "4":
+        print("请在另一个终端 ping 本机的 IPv6 默认网关。")
 
     try:
         packets = sniff(
