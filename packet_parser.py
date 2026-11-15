@@ -1,4 +1,5 @@
 from http_parser import parse_http_payload
+from ipv6_headers import locate_ipv6_transport
 
 import socket
 import struct
@@ -338,20 +339,18 @@ def parse_ipv6_packet(data):
     if len(data) < declared_end:
         lines.append("提示：捕获的数据短于 IPv6 声明的长度。")
 
-    payload = data[40:min(len(data), declared_end)]
+    protocol, payload, notes = locate_ipv6_transport(data)
+    lines.extend(notes)
 
-    if next_header == 6:
+    if protocol == 6:
         lines.extend(parse_tcp_segment(payload))
-    elif next_header == 17:
+    elif protocol == 17:
         lines.extend(parse_udp_datagram(payload))
-    elif next_header == 58:
-        lines.append("已识别 ICMPv6，具体字段将在后续实现。")
-    elif next_header == 59:
-        lines.append("无下一头部，不继续解析。")
-    else:
-        lines.append("该下一头部尚未实现解析，在此停止。")
+    elif protocol == 58:
+        lines.append("已识别 ICMPv6，具体字段尚未实现。")
 
     return lines
+
 def parse_loopback_frame(data):
     """处理本次环境中捕获到的 IPv4 回环帧。"""
     lines = ["【回环链路层】"]

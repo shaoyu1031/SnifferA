@@ -175,9 +175,8 @@ class PacketParserTests(unittest.TestCase):
         self.assertIn("【TCP 层】", result)
         self.assertIn("目的端口：8000", result)
 
-    def test_ipv6_extension_not_misread(self):
-        """未支持的扩展头不能被直接解释为 TCP。"""
-        # 8 字节逐跳扩展头，其下一头部字段指向 TCP。
+    def test_ipv6_extension_locates_tcp(self):
+        """跳过逐跳扩展头后，正确解析 TCP。"""
         extension = bytes([6, 0]) + b"\x00" * 6
         raw = make_ethernet(
             make_ipv6(extension + make_tcp(), 0),
@@ -185,8 +184,10 @@ class PacketParserTests(unittest.TestCase):
         )
         result = parse_ethernet_frame(raw)
 
-        self.assertIn("尚未实现解析", result)
-        self.assertNotIn("【TCP 层】", result)
+        self.assertIn("【逐跳选项】", result)
+        self.assertIn("最终上层协议编号：6", result)
+        self.assertIn("【TCP 层】", result)
+        self.assertIn("目的端口：8000", result)
 
     def test_ipv4_loopback(self):
         """回环头跳过 4 字节后，仍能正确解析 IP 和 UDP。"""

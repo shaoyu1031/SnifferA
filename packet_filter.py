@@ -1,7 +1,7 @@
 import struct
 
 from http_parser import parse_http_payload
-
+from ipv6_headers import locate_ipv6_transport
 
 def matches_protocol(data, selected, link_type="ethernet"):
     """根据链路层格式定位 IP，再筛选协议。"""
@@ -81,14 +81,9 @@ def matches_protocol(data, selected, link_type="ethernet"):
         if selected == "IPv6":
             return True
 
-        protocol = data[offset + 6]
-        payload_length = struct.unpack(
-            "!H", data[offset + 4:offset + 6]
-        )[0]
-
-        # 仍只支持基本头部直接指向的上层协议。
-        end = min(len(data), offset + 40 + payload_length)
-        transport = data[offset + 40:end]
+        protocol, transport, notes = locate_ipv6_transport(data[offset:])
+        if protocol is None:
+            return False
 
     else:
         return False
